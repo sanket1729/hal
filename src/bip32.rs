@@ -13,6 +13,7 @@ pub struct DerivationInfo {
 	pub xpriv: Option<bip32::ExtendedPrivKey>,
 	pub xpub: bip32::ExtendedPubKey,
 	pub chain_code: bip32::ChainCode,
+	pub parent_fingerprint: bip32::Fingerprint,
 	pub identifier: bitcoin::XpubIdentifier,
 	pub fingerprint: bip32::Fingerprint,
 	pub public_key: bitcoin::PublicKey,

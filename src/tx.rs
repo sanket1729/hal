@@ -90,6 +90,7 @@ impl<'a> ::GetInfo<OutputScriptInfo> for OutputScript<'a> {
 pub struct OutputInfo {
 	pub value: Option<u64>,
 	pub script_pub_key: Option<OutputScriptInfo>,
+	pub witness_utxo: Option<::HexBytes>
 }
 
 impl ::GetInfo<OutputInfo> for TxOut {
@@ -97,6 +98,7 @@ impl ::GetInfo<OutputInfo> for TxOut {
 		OutputInfo {
 			value: Some(self.value),
 			script_pub_key: Some(OutputScript(&self.script_pubkey).get_info(network)),
+			witness_utxo: Some(bitcoin::consensus::encode::serialize(&self).into()),
 		}
 	}
 }

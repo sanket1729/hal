@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use bitcoin::hashes::hex::FromHex;
 use bitcoin::Script;
 use clap;
@@ -7,7 +9,7 @@ use hal::miniscript::{
 use miniscript::descriptor::Descriptor;
 use miniscript::miniscript::{BareCtx, Legacy, Miniscript, Segwitv0};
 use miniscript::policy::Liftable;
-use miniscript::{policy, DescriptorTrait, MiniscriptKey};
+use miniscript::{policy, DescriptorTrait, MiniscriptKey, TranslatePk2};
 
 use cmd;
 
@@ -33,23 +35,30 @@ pub fn execute<'a>(matches: &clap::ArgMatches<'a>) {
 fn cmd_descriptor<'a>() -> clap::App<'a, 'a> {
 	cmd::subcommand("descriptor", "get information about an output descriptor")
 		.arg(cmd::opt_yaml())
+		.args(&cmd::opts_networks())
 		.args(&[cmd::arg("descriptor", "the output descriptor to inspect").required(true)])
 }
 
 fn exec_descriptor<'a>(matches: &clap::ArgMatches<'a>) {
 	let desc_str = matches.value_of("descriptor").expect("no descriptor argument given");
 	let network = cmd::network(matches);
+	let secp = secp256k1::Secp256k1::new();
 
-	let info = desc_str
-		.parse::<Descriptor<bitcoin::PublicKey>>()
-		.map(|desc| DescriptorInfo {
-			key_type: MiniscriptKeyType::PublicKey,
+	let info = Descriptor::<miniscript::DescriptorPublicKey>::parse_descriptor(&secp, &desc_str)
+		.map(|(desc, key_map)| {
+			let desc = desc.derive(0).translate_pk2_infallible(|d| d.derive_public_key(&secp)
+				.expect("Hardened derivation"));
+			(desc, key_map)
+		}).map(|(desc, key_map)| DescriptorInfo {
+			key_type: MiniscriptKeyType::DescriptorPublicKey,
 			address: desc.address(network).map(|a| a.to_string()).ok(),
 			script_pubkey: Some(desc.script_pubkey().into_bytes().into()),
 			unsigned_script_sig: Some(desc.unsigned_script_sig().into_bytes().into()),
 			witness_script: Some(desc.explicit_script().into_bytes().into()),
 			max_satisfaction_weight: desc.max_satisfaction_weight().ok(),
 			policy: policy::Liftable::lift(&desc).map(|pol| pol.to_string()).ok(),
+			key_map: key_map.iter().map(|(k, v)|
+						(k.to_string(), v.to_string())).collect::<HashMap<_, _>>(),
 		})
 		.or_else(|e| {
 			debug!("Can't parse descriptor with public keys: {}", e);
@@ -62,6 +71,7 @@ fn exec_descriptor<'a>(matches: &clap::ArgMatches<'a>) {
 				witness_script: None,
 				max_satisfaction_weight: desc.max_satisfaction_weight().ok(),
 				policy: policy::Liftable::lift(&desc).map(|pol| pol.to_string()).ok(),
+				key_map: HashMap::new(),
 			})
 		})
 		.expect("invalid miniscript");

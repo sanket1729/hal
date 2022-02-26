@@ -1,8 +1,12 @@
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, PartialEq, Eq, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MiniscriptKeyType {
+	DescriptorPublicKey,
+	DescriptorSecretKey,
 	PublicKey,
 	String,
 }
@@ -75,6 +79,8 @@ pub struct DescriptorInfo {
 	pub max_satisfaction_weight: Option<usize>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub policy: Option<String>,
+	#[serde(skip_serializing_if = "HashMap::is_empty")]
+	pub key_map: HashMap<String, String>,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, Deserialize, Serialize)]
