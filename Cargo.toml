@@ -33,7 +33,7 @@ hex = "0.3.2"
 
 tiny-bip39 = "0.6.2"
 lightning-invoice = "0.11.0"
-miniscript = { git = "https://github.com/sanket1729/rust-miniscript", rev = "c34c038071c7fc6433ca529c8764c6d50be06b4f", features = ["compiler", "use-serde"] }
+miniscript = { git = "https://github.com/sanket1729/rust-miniscript", rev = "408bc231a26d9d3402b3f0c2e805e7b6ae7e39f0", features = ["compiler", "use-serde"] }
 
 # For external commands
 jobserver = "0.1.11"

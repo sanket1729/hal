@@ -5,6 +5,7 @@ use std::str::FromStr;
 use base64;
 use clap;
 use hal::bitcoin::hashes::Hash;
+use hal::bitcoin::schnorr::TapTweak;
 use hal::bitcoin::util::taproot::{TapLeafHash, LeafVersion};
 use hal::psbt::PsbtInfo;
 use hex;
@@ -683,7 +684,8 @@ fn exec_rawsign<'a>(matches: &clap::ArgMatches<'a>) {
 		if is_key_spend {
 			let msg = cache.taproot_key_spend_signature_hash(i, &utxos, schnorr_sighash_ty).expect("SigHash Calculation error");
 			let msg = secp256k1::Message::from_slice(&msg).expect("32 byte");
-			let schnorr_sig = secp.sign_schnorr_with_aux_rand(&msg, &keypair, &entropy);
+			let tweaked_keypair = keypair.tap_tweak(&secp, psbt.inputs[i].tap_merkle_root);
+			let schnorr_sig = secp.sign_schnorr_with_aux_rand(&msg, &tweaked_keypair.into_inner(), &entropy);
 			let btc_sig = bitcoin::SchnorrSig {
 				sig: schnorr_sig,
 				hash_ty: bitcoin::SchnorrSigHashType::Default,

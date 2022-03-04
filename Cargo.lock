@@ -436,7 +436,7 @@ checksum = "308cc39be01b73d0d18f82a0e7b2a3df85245f84af96fdddc5d202d27e47b86a"
 [[package]]
 name = "miniscript"
 version = "6.0.1"
-source = "git+https://github.com/sanket1729/rust-miniscript?rev=c34c038071c7fc6433ca529c8764c6d50be06b4f#c34c038071c7fc6433ca529c8764c6d50be06b4f"
+source = "git+https://github.com/sanket1729/rust-miniscript?rev=408bc231a26d9d3402b3f0c2e805e7b6ae7e39f0#408bc231a26d9d3402b3f0c2e805e7b6ae7e39f0"
 dependencies = [
  "bitcoin 0.28.0-rc.1",
  "serde",
