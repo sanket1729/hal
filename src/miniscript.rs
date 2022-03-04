@@ -16,6 +16,7 @@ pub struct ScriptContexts {
 	pub bare: bool, // in bare script pubkey
 	pub p2sh: bool,
 	pub segwitv0: bool,
+	pub taproot: bool,
 }
 
 impl ScriptContexts {
@@ -25,6 +26,7 @@ impl ScriptContexts {
 			bare: bare,
 			p2sh: false,
 			segwitv0: false,
+			taproot: false,
 		}
 	}
 
@@ -33,6 +35,7 @@ impl ScriptContexts {
 			bare: false,
 			p2sh: p2sh,
 			segwitv0: false,
+			taproot: false,
 		}
 	}
 
@@ -41,6 +44,16 @@ impl ScriptContexts {
 			bare: false,
 			p2sh: false,
 			segwitv0: segwitv0,
+			taproot: false,
+		}
+	}
+
+	pub fn from_taproot(taproot: bool) -> Self {
+		Self {
+			bare: false,
+			p2sh: false,
+			segwitv0: false,
+			taproot: taproot,
 		}
 	}
 
@@ -49,6 +62,7 @@ impl ScriptContexts {
 			bare: a.bare || b.bare,
 			p2sh: a.p2sh || b.p2sh,
 			segwitv0: a.segwitv0 || b.segwitv0,
+			taproot: a.taproot || b.taproot,
 		}
 	}
 }
@@ -61,7 +75,8 @@ pub struct Miniscripts {
 	pub p2sh: Option<String>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub segwitv0: Option<String>,
-	// Taproot to come
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub taproot: Option<String>,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, Deserialize, Serialize)]
@@ -81,6 +96,8 @@ pub struct DescriptorInfo {
 	pub policy: Option<String>,
 	#[serde(skip_serializing_if = "HashMap::is_empty")]
 	pub key_map: HashMap<String, String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub desc_pub: Option<String>,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, Deserialize, Serialize)]
@@ -114,7 +131,8 @@ pub struct PolicyInfo {
 	pub is_unsatisfiable: bool,
 	pub relative_timelocks: Vec<u32>,
 	pub n_keys: usize,
-	pub minimum_n_keys: usize,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub minimum_n_keys: Option<usize>,
 	pub sorted: String,
 	pub normalized: String,
 	#[serde(skip_serializing_if = "Option::is_none")]

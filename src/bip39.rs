@@ -56,7 +56,7 @@ impl ::GetInfo<SeedInfo> for Seed {
 	fn get_info(&self, network: Network) -> SeedInfo {
 		let xpriv = bip32::ExtendedPrivKey::new_master(network, self.as_bytes()).unwrap();
 		let xpub =
-			bip32::ExtendedPubKey::from_private(&secp256k1::Secp256k1::signing_only(), &xpriv);
+			bip32::ExtendedPubKey::from_priv(&secp256k1::Secp256k1::signing_only(), &xpriv);
 		SeedInfo {
 			seed: self.as_bytes().into(),
 			bip32_xpriv: xpriv,

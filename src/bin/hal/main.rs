@@ -1,5 +1,4 @@
 extern crate bip39;
-extern crate bitcoin;
 extern crate lightning_invoice;
 #[macro_use]
 extern crate log;
@@ -12,6 +11,7 @@ extern crate jobserver;
 extern crate rand;
 extern crate serde_json;
 extern crate shell_escape;
+pub use miniscript::bitcoin;
 
 extern crate hal;
 
@@ -116,7 +116,7 @@ fn main() {
 		("bip32", Some(ref m)) => cmd::bip32::execute(&m),
 		("bip39", Some(ref m)) => cmd::bip39::execute(&m),
 		("key", Some(ref m)) => cmd::key::execute(&m),
-		("ln", Some(ref m)) => cmd::ln::execute(&m),
+		// ("ln", Some(ref m)) => cmd::ln::execute(&m),
 		("message", Some(ref m)) => cmd::message::execute(&m),
 		("miniscript", Some(ref m)) => cmd::miniscript::execute(&m),
 		("psbt", Some(ref m)) => cmd::psbt::execute(&m),

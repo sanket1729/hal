@@ -1,3 +1,4 @@
+use bitcoin;
 use bitcoin::consensus::encode::serialize;
 use bitcoin::{Address, Network, Script, Transaction, TxIn, TxOut, Txid, Wtxid};
 use serde::{Deserialize, Serialize};

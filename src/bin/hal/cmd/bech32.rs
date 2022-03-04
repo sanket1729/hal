@@ -1,4 +1,4 @@
-use bitcoin::bech32::{decode, encode, CheckBase32, FromBase32, ToBase32};
+use bitcoin::bech32::{self, decode, encode, CheckBase32, FromBase32, ToBase32};
 use clap;
 use hex;
 
@@ -45,7 +45,7 @@ fn exec_encode<'a>(matches: &clap::ArgMatches<'a>) {
 		payload.to_base32()
 	};
 
-	let bech32 = encode(hrp, payload_base32.to_vec()).expect("encode failure");
+	let bech32 = encode(hrp, payload_base32.to_vec(), bech32::Variant::Bech32).expect("encode failure");
 	let payload_as_u8: Vec<u8> = payload_base32.to_vec().iter().map(|b| b.to_u8()).collect();
 
 	let info = hal::bech32::Bech32Info {
@@ -77,7 +77,8 @@ fn cmd_decode<'a>() -> clap::App<'a, 'a> {
 fn exec_decode<'a>(matches: &clap::ArgMatches<'a>) {
 	let s = matches.value_of("string").expect("missing required argument");
 
-	let (hrp, payload_base32) = decode(&s).expect("decode failure");
+	let (hrp, payload_base32, variant) = decode(&s).expect("decode failure");
+	assert_eq!(variant, bech32::Variant::Bech32, "Bech32m not supported");
 	let payload_as_u8: Vec<u8> = payload_base32.to_vec().iter().map(|b| b.to_u8()).collect();
 
 	let info = hal::bech32::Bech32Info {

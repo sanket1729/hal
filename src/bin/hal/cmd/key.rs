@@ -2,7 +2,7 @@ use std::process;
 use std::str::FromStr;
 
 use bitcoin::secp256k1;
-use bitcoin::{PrivateKey, PublicKey};
+use bitcoin::{self, PrivateKey, PublicKey};
 use clap;
 use rand;
 
@@ -44,7 +44,7 @@ fn exec_generate<'a>(matches: &clap::ArgMatches<'a>) {
 	let privkey = bitcoin::PrivateKey {
 		compressed: true,
 		network: network,
-		key: secret_key,
+		inner: secret_key,
 	};
 	let pubkey = privkey.public_key(&secp);
 
@@ -76,7 +76,7 @@ fn exec_inspect<'a>(matches: &clap::ArgMatches<'a>) {
 		let pubkey = privkey.public_key(&secp256k1::Secp256k1::new());
 
 		hal::key::KeyInfo {
-			raw_private_key: (&privkey.key[..]).into(),
+			raw_private_key: (&privkey.inner[..]).into(),
 			wif_private_key: Some(privkey),
 			public_key: pubkey,
 			uncompressed_public_key: {
@@ -90,7 +90,7 @@ fn exec_inspect<'a>(matches: &clap::ArgMatches<'a>) {
 		let pubkey = secp256k1::PublicKey::from_secret_key(&secp256k1::Secp256k1::new(), &sk);
 		let btc_pubkey = PublicKey {
 			compressed: true,
-			key: pubkey.clone(),
+			inner: pubkey.clone(),
 		};
 		let network = cmd::network(matches);
 		hal::key::KeyInfo {
@@ -99,7 +99,7 @@ fn exec_inspect<'a>(matches: &clap::ArgMatches<'a>) {
 			public_key: btc_pubkey,
 			uncompressed_public_key: PublicKey {
 				compressed: false,
-				key: pubkey,
+				inner: pubkey,
 			},
 			addresses: hal::address::Addresses::from_pubkey(&btc_pubkey, network),
 		}
@@ -132,12 +132,12 @@ fn exec_sign<'a>(matches: &clap::ArgMatches<'a>) {
 		if let Ok(sk) = secp256k1::SecretKey::from_str(&pk) {
 			sk
 		} else {
-			bitcoin::PrivateKey::from_wif(&pk).expect("invalid private key provided").key
+			bitcoin::PrivateKey::from_wif(&pk).expect("invalid private key provided").inner
 		}
 	};
 
 	let secp = secp256k1::Secp256k1::signing_only();
-	let signature = secp.sign(&msg, &privkey);
+	let signature = secp.sign_ecdsa(&msg, &privkey);
 
 	let info = hal::key::SignatureInfo {
 		der: signature.serialize_der().as_ref().into(),
@@ -171,20 +171,20 @@ fn exec_verify<'a>(matches: &clap::ArgMatches<'a>) {
 		let hex = matches.value_of("signature").expect("no signature provided");
 		let bytes = hex::decode(&hex).expect("invalid signature: not hex");
 		if bytes.len() == 64 {
-			secp256k1::Signature::from_compact(&bytes).expect("invalid signature")
+			secp256k1::ecdsa::Signature::from_compact(&bytes).expect("invalid signature")
 		} else {
-			secp256k1::Signature::from_der(&bytes).expect("invalid DER signature")
+			secp256k1::ecdsa::Signature::from_der(&bytes).expect("invalid DER signature")
 		}
 	};
 
 	let secp = secp256k1::Secp256k1::verification_only();
-	let valid = secp.verify(&msg, &sig, &pubkey.key).is_ok();
+	let valid = secp.verify_ecdsa(&msg, &sig, &pubkey.inner).is_ok();
 
 	// Perhaps the user should have passed --reverse.
 	if !valid && !matches.is_present("no-try-reverse") {
 		msg_bytes.reverse();
 		let msg = secp256k1::Message::from_slice(&msg_bytes[..]).expect("invalid message to be signed");
-		if secp.verify(&msg, &sig, &pubkey.key).is_ok() {
+		if secp.verify_ecdsa(&msg, &sig, &pubkey.inner).is_ok() {
 			eprintln!("Signature is valid for the reverse message.");
 			if matches.is_present("reverse") {
 				eprintln!("Try dropping the --reverse");

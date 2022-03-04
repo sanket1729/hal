@@ -1,7 +1,7 @@
 use std::io::{self, Read, Write};
 
 use bitcoin::consensus::encode::{deserialize, serialize};
-use bitcoin::{Network, OutPoint, Script, Transaction, TxIn, TxOut};
+use bitcoin::{self, Network, OutPoint, Script, Transaction, TxIn, TxOut};
 
 use cmd;
 use hal::tx::{InputInfo, InputScriptInfo, OutputInfo, OutputScriptInfo, TransactionInfo};
@@ -116,10 +116,10 @@ fn create_input(input: InputInfo) -> TxIn {
 		previous_output: outpoint_from_input_info(&input),
 		script_sig: input.script_sig.map(create_script_sig).unwrap_or_default(),
 		sequence: input.sequence.unwrap_or_default(),
-		witness: match input.witness {
+		witness: bitcoin::Witness::from_vec(match input.witness {
 			Some(ref w) => w.iter().map(|h| h.clone().0).collect(),
 			None => Vec::new(),
-		},
+		}),
 	}
 }
 

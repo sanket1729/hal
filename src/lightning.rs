@@ -4,7 +4,7 @@ use bitcoin::util::address::Payload;
 use bitcoin::{Address, Network};
 use byteorder::{BigEndian, ByteOrder};
 use chrono::{offset::Local, DateTime, Duration};
-use lightning_invoice::{Currency, Fallback, Invoice, InvoiceDescription, RouteHop};
+use lightning_invoice::{Currency, Fallback, Invoice, InvoiceDescription};
 use serde::{Deserialize, Serialize};
 
 const WRONG_CID: &'static str = "incorrect short channel ID HRF format";

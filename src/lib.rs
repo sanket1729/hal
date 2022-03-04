@@ -1,12 +1,14 @@
 extern crate bip39 as bip39lib;
-extern crate bitcoin;
 extern crate byteorder;
 extern crate chrono;
 extern crate hex;
 extern crate lightning_invoice;
 extern crate miniscript as miniscriptlib;
-extern crate secp256k1;
 extern crate serde;
+
+// Use bitcoin and secp re-exported from miniscript
+pub use miniscriptlib::bitcoin;
+pub use miniscriptlib::bitcoin::secp256k1;
 
 pub mod address;
 pub mod bech32;
@@ -14,7 +16,7 @@ pub mod bip32;
 pub mod bip39;
 pub mod block;
 pub mod key;
-pub mod lightning;
+// pub mod lightning;
 pub mod message;
 pub mod miniscript;
 pub mod psbt;

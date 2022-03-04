@@ -4,12 +4,14 @@ pub mod bip32;
 pub mod bip39;
 pub mod block;
 pub mod key;
-pub mod ln;
+// pub mod ln;
 pub mod message;
 pub mod miniscript;
 pub mod psbt;
 pub mod script;
 pub mod tx;
+
+pub use super::bitcoin;
 
 use bitcoin::Network;
 
@@ -20,7 +22,7 @@ pub fn subcommands<'a>() -> Vec<clap::App<'a, 'a>> {
 		bech32::subcommand(),
 		block::subcommand(),
 		key::subcommand(),
-		ln::subcommand(),
+		// ln::subcommand(),
 		message::subcommand(),
 		miniscript::subcommand(),
 		tx::subcommand(),

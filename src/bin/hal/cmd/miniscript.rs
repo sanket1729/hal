@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use bitcoin::hashes::hex::FromHex;
 use bitcoin::Script;
+use bitcoin::{self, secp256k1};
 use clap;
 use hal::miniscript::{
 	DescriptorInfo, MiniscriptInfo, MiniscriptKeyType, Miniscripts, PolicyInfo, ScriptContexts,
@@ -9,7 +10,7 @@ use hal::miniscript::{
 use miniscript::descriptor::Descriptor;
 use miniscript::miniscript::{BareCtx, Legacy, Miniscript, Segwitv0};
 use miniscript::policy::Liftable;
-use miniscript::{policy, DescriptorTrait, MiniscriptKey, TranslatePk2};
+use miniscript::{policy, DescriptorTrait, MiniscriptKey, TranslatePk2, Tap};
 
 use cmd;
 
@@ -54,11 +55,12 @@ fn exec_descriptor<'a>(matches: &clap::ArgMatches<'a>) {
 			address: desc.address(network).map(|a| a.to_string()).ok(),
 			script_pubkey: Some(desc.script_pubkey().into_bytes().into()),
 			unsigned_script_sig: Some(desc.unsigned_script_sig().into_bytes().into()),
-			witness_script: Some(desc.explicit_script().into_bytes().into()),
+			witness_script: desc.explicit_script().map(|x| x.into_bytes().into()).ok(),
 			max_satisfaction_weight: desc.max_satisfaction_weight().ok(),
 			policy: policy::Liftable::lift(&desc).map(|pol| pol.to_string()).ok(),
 			key_map: key_map.iter().map(|(k, v)|
 						(k.to_string(), v.to_string())).collect::<HashMap<_, _>>(),
+			desc_pub: Some(desc.to_string()),
 		})
 		.or_else(|e| {
 			debug!("Can't parse descriptor with public keys: {}", e);
@@ -72,6 +74,7 @@ fn exec_descriptor<'a>(matches: &clap::ArgMatches<'a>) {
 				max_satisfaction_weight: desc.max_satisfaction_weight().ok(),
 				policy: policy::Liftable::lift(&desc).map(|pol| pol.to_string()).ok(),
 				key_map: HashMap::new(),
+				desc_pub: None,
 			})
 		})
 		.expect("invalid miniscript");
@@ -224,6 +227,13 @@ where
 					None
 				}
 			},
+			taproot: match policy::concrete::Policy::compile_tr(&p, None) {
+				Ok(ms) => Some(ms.to_string()),
+				Err(e) => {
+					debug!("Compiler error: {}", e);
+					None
+				}
+			},
 		}),
 	})
 }
@@ -258,6 +268,11 @@ trait FromScriptContexts: Sized {
 	) -> Self;
 	fn from_segwitv0<Pk: MiniscriptKey>(
 		ms: Miniscript<Pk, Segwitv0>,
+		key_type: MiniscriptKeyType,
+		script: Option<bitcoin::Script>,
+	) -> Self;
+	fn from_taproot<Pk: MiniscriptKey>(
+		ms: Miniscript<Pk, Tap>,
 		key_type: MiniscriptKeyType,
 		script: Option<bitcoin::Script>,
 	) -> Self;
@@ -349,6 +364,35 @@ impl FromScriptContexts for MiniscriptInfo {
 			has_mixed_timelocks: ms.has_mixed_timelocks(),
 			has_repeated_keys: ms.has_repeated_keys(),
 			sane_miniscript: ScriptContexts::from_segwitv0(ms.sanity_check().is_ok()),
+		}
+	}
+
+	fn from_taproot<Pk: MiniscriptKey>(
+		ms: Miniscript<Pk, Tap>,
+		key_type: MiniscriptKeyType,
+		script: Option<bitcoin::Script>,
+	) -> Self {
+		Self {
+			key_type: key_type,
+			valid_script_contexts: ScriptContexts::from_taproot(true),
+			script_size: ms.script_size(),
+			max_satisfaction_witness_elements: ms.max_satisfaction_witness_elements().ok(),
+			max_satisfaction_size_segwit: ms.max_satisfaction_size().ok(),
+			max_satisfaction_size_non_segwit: None,
+			script: script.map(|x| x.into_bytes().into()),
+			policy: match ms.lift() {
+				Ok(pol) => Some(pol.to_string()),
+				Err(e) => {
+					info!("Lift error {}: Taproot Context", e);
+					None
+				}
+			},
+			requires_sig: ms.requires_sig(),
+			non_malleable: ScriptContexts::from_taproot(ms.is_non_malleable()),
+			within_resource_limits: ScriptContexts::from_taproot(ms.within_resource_limits()),
+			has_mixed_timelocks: ms.has_mixed_timelocks(),
+			has_repeated_keys: ms.has_repeated_keys(),
+			sane_miniscript: ScriptContexts::from_taproot(ms.sanity_check().is_ok()),
 		}
 	}
 

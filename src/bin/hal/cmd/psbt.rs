@@ -4,15 +4,20 @@ use std::str::FromStr;
 
 use base64;
 use clap;
+use hal::bitcoin::hashes::Hash;
+use hal::bitcoin::util::taproot::{TapLeafHash, LeafVersion};
+use hal::psbt::PsbtInfo;
 use hex;
 
 use bitcoin::{PrivateKey, consensus::{deserialize, serialize}};
 use bitcoin::secp256k1;
 use bitcoin::util::bip32;
 use bitcoin::util::psbt;
-use bitcoin::{PublicKey, Transaction};
+use bitcoin::{self, PublicKey, Transaction};
+use bitcoin::XOnlyPublicKey;
 
 use cmd;
+use miniscript::{DescriptorTrait, Miniscript, Tap, DescriptorPublicKey, Descriptor, ToPublicKey};
 
 pub fn subcommand<'a>() -> clap::App<'a, 'a> {
 	cmd::subcommand_group("psbt", "partially signed Bitcoin transactions")
@@ -22,6 +27,7 @@ pub fn subcommand<'a>() -> clap::App<'a, 'a> {
 		.subcommand(cmd_finalize())
 		.subcommand(cmd_merge())
 		.subcommand(cmd_rawsign())
+		.subcommand(cmd_utxoupdate())
 }
 
 pub fn execute<'a>(matches: &clap::ArgMatches<'a>) {
@@ -32,6 +38,7 @@ pub fn execute<'a>(matches: &clap::ArgMatches<'a>) {
 		("finalize", Some(ref m)) => exec_finalize(&m),
 		("merge", Some(ref m)) => exec_merge(&m),
 		("rawsign", Some(ref m)) => exec_rawsign(&m),
+		("utxoupdate", Some(ref m)) => exec_utxoupdate(&m),
 		(c, _) => eprintln!("command {} unknown", c),
 	};
 }
@@ -105,7 +112,7 @@ fn exec_decode<'a>(matches: &clap::ArgMatches<'a>) {
 
 	let psbt: psbt::PartiallySignedTransaction = deserialize(&raw_psbt).expect("invalid PSBT");
 
-	let info = hal::GetInfo::get_info(&psbt, cmd::network(matches));
+	let info : PsbtInfo = hal::GetInfo::get_info(&psbt, cmd::network(matches));
 	cmd::print_output(matches, &info)
 }
 
@@ -178,6 +185,11 @@ fn cmd_edit<'a>() -> clap::App<'a, 'a> {
 			.next_line_help(true)
 			.takes_value(true)
 			.required(false),
+		cmd::opt("sha256-preimages-add", "add a sha256 preimage `<preimage>:<sha256>`")
+			.display_order(99)
+			.next_line_help(true)
+			.takes_value(true)
+			.required(false),
 		// (omitted) redeem-script
 		// (omitted) witness-script
 		// (omitted) hd-keypaths
@@ -202,19 +214,33 @@ fn cmd_edit<'a>() -> clap::App<'a, 'a> {
 }
 
 /// Parses a `<pubkey>:<signature>` pair.
-fn parse_partial_sig_pair(pair_str: &str) -> (PublicKey, Vec<u8>) {
+fn parse_partial_sig_pair(pair_str: &str) -> (PublicKey, bitcoin::EcdsaSig) {
 	let mut pair = pair_str.splitn(2, ":");
 	let pubkey = pair.next().unwrap().parse().expect("invalid partial sig pubkey");
 	let sig = {
 		let hex = pair.next().expect("invalid partial sig pair: missing signature");
 		hex::decode(&hex).expect("invalid partial sig signature hex")
 	};
-	(pubkey, sig)
+	(pubkey, bitcoin::EcdsaSig::from_slice(&sig).expect("Invalid Ecdsa sig"))
+}
+
+fn parse_hash_preimage_pair(pair_str: &str) -> (Vec<u8>, bitcoin::hashes::sha256::Hash) {
+	let mut pair = pair_str.splitn(2, ":");
+	let preimage  = {
+		let hex = pair.next().expect("Invalid sha256 hex");
+		hex::decode(&hex).expect("Unreachable!")
+	};
+	let hash = {
+		let hex = pair.next().expect("Invalid sha256 hex");
+		let sl = hex::decode(&hex).expect("Unreachable!");
+		bitcoin::hashes::sha256::Hash::from_slice(&sl).unwrap()
+	};
+	(preimage, hash)
 }
 
 fn parse_hd_keypath_triplet(
 	triplet_str: &str,
-) -> (PublicKey, (bip32::Fingerprint, bip32::DerivationPath)) {
+) -> (bitcoin::secp256k1::PublicKey, (bip32::Fingerprint, bip32::DerivationPath)) {
 	let mut triplet = triplet_str.splitn(3, ":");
 	let pubkey = triplet.next().unwrap().parse().expect("invalid HD keypath pubkey");
 	let fp = {
@@ -263,6 +289,14 @@ fn edit_input<'a>(
 		}
 	}
 
+	if let Some(pairs) = matches.values_of("sha256-preimages-add") {
+		for (preimage, hash) in pairs.map(parse_hash_preimage_pair) {
+			if input.sha256_preimages.insert(hash, preimage.to_vec()).is_some() {
+				panic!("sha256 Hash {} is already in partial preimages", &hash);
+			}
+		}
+	}
+
 	if let Some(sht) = matches.value_of("sighash-type") {
 		input.sighash_type = Some(hal::psbt::sighashtype_from_string(&sht));
 	}
@@ -296,7 +330,7 @@ fn edit_input<'a>(
 	if let Some(csv) = matches.value_of("final-script-witness") {
 		let vhex = csv.split(",");
 		let vraw = vhex.map(|h| hex::decode(&h).expect("invalid final-script-witness hex"));
-		input.final_script_witness = Some(vraw.collect());
+		input.final_script_witness = Some(bitcoin::Witness::from_vec(vraw.collect()));
 	}
 }
 
@@ -415,11 +449,11 @@ fn exec_merge<'a>(matches: &clap::ArgMatches<'a>) {
 
 	let mut merged = parts.next().unwrap();
 	for (idx, part) in parts.enumerate() {
-		if part.global.unsigned_tx != merged.global.unsigned_tx {
+		if part.unsigned_tx != merged.unsigned_tx {
 			panic!("PSBTs are not compatible");
 		}
 
-		merged.merge(part).expect(&format!("error merging PSBT #{}", idx));
+		merged.combine(part).expect(&format!("error merging PSBT #{}", idx));
 	}
 
 	let merged_raw = serialize(&merged);
@@ -451,6 +485,91 @@ fn cmd_rawsign<'a>() -> clap::App<'a, 'a> {
 	])
 }
 
+fn cmd_utxoupdate<'a>() -> clap::App<'a, 'a> {
+	cmd::subcommand("utxoupdate", "Update a psbt with descriptor information. Updates the \
+	witness script/redeem script/control block information based on spend type").args(&[
+		cmd::arg("psbt", "PSBT to finalize, either base64/hex or a file path").required(true),
+		cmd::arg("input-idx", "the input index to edit").required(true),
+		cmd::arg("desc", "The descriptors with only public information").required(true),
+		cmd::opt("raw-stdout", "output the raw bytes of the result to stdout")
+			.short("r")
+			.required(false),
+		cmd::opt("output", "where to save the resulting PSBT file -- in place if omitted")
+			.short("o")
+			.takes_value(true)
+			.required(false),
+	])
+}
+
+fn exec_utxoupdate<'a>(matches: &clap::ArgMatches<'a>) {
+	let (raw, source) = file_or_raw(&matches.value_of("psbt").unwrap());
+	let mut psbt: psbt::PartiallySignedTransaction = deserialize(&raw).expect("invalid PSBT format");
+
+	let desc = matches.value_of("desc").expect("No descriptor provided");
+	let i = matches.value_of("input-idx").expect("Input index not provided")
+		.parse::<usize>().expect("input-idx must be a positive integer");
+
+	let secp = secp256k1::Secp256k1::new();
+	let desc = miniscript::Descriptor::<DescriptorPublicKey>::from_str(desc).expect("Error parsing descriptor");
+	let desc = desc.derived_descriptor(0, &secp).expect("Hardened derivation");
+	if i >= psbt.inputs.len() {
+		panic!("Psbt input index out of range")
+	}
+
+	let mut psbt_inp = &mut psbt.inputs[i];
+	match desc {
+		Descriptor::Bare(..) |
+		Descriptor::Pkh(..) |
+		Descriptor::Wpkh(..) => todo!(),
+		Descriptor::Sh(ref sh) => {
+			match sh.as_inner() {
+				miniscript::descriptor::ShInner::Wsh(wsh) => {
+					psbt_inp.witness_script = Some(wsh.inner_script());
+					psbt_inp.redeem_script = Some(desc.unsigned_script_sig());
+				},
+				miniscript::descriptor::ShInner::Wpkh(_wpkh) => {},
+				miniscript::descriptor::ShInner::SortedMulti(svm) => {
+					psbt_inp.redeem_script = Some(svm.encode());
+				},
+				miniscript::descriptor::ShInner::Ms(ms) => {
+					psbt_inp.redeem_script = Some(ms.encode());
+				},
+			}
+		},
+		Descriptor::Wsh(ref wsh) => {
+			psbt_inp.witness_script = Some(wsh.inner_script());
+		},
+		Descriptor::Tr(ref tr) => {
+			psbt_inp.tap_internal_key = Some(tr.internal_key().to_x_only_pubkey());
+			let spend_info = tr.spend_info();
+			psbt_inp.tap_merkle_root = spend_info.merkle_root();
+			for (_depth, ms ) in tr.iter_scripts() {
+				let ver_script = (ms.encode(), LeafVersion::TapScript);
+				let ctrl_block = spend_info.control_block(&ver_script)
+					.expect("Unexpected Error while computing control block");
+				psbt_inp.tap_scripts.insert(ctrl_block, ver_script);
+			}
+		},
+	}
+	let raw = serialize(&psbt);
+	if let Some(path) = matches.value_of("output") {
+		let mut file = File::create(&path).expect("failed to open output file");
+		file.write_all(&raw).expect("error writing output file");
+	} else if matches.is_present("raw-stdout") {
+		::std::io::stdout().write_all(&raw).unwrap();
+	} else {
+		match source {
+			PsbtSource::Hex => println!("{}", hex::encode(&raw)),
+			PsbtSource::Base64 => println!("{}", base64::encode(&raw)),
+			PsbtSource::File => {
+				let path = matches.value_of("psbt").unwrap();
+				let mut file = File::create(&path).expect("failed to PSBT file for writing");
+				file.write_all(&raw).expect("error writing PSBT file");
+			}
+		}
+	}
+}
+
 // Get the scriptpubkey/amount for the psbt input
 fn get_spk_amt(psbt: &psbt::PartiallySignedTransaction, index: usize) -> (&bitcoin::Script, u64) {
 	let script_pubkey;
@@ -460,7 +579,7 @@ fn get_spk_amt(psbt: &psbt::PartiallySignedTransaction, index: usize) -> (&bitco
 		script_pubkey = &witness_utxo.script_pubkey;
 		amt = witness_utxo.value;
 	} else if let Some(ref non_witness_utxo) = inp.non_witness_utxo {
-		let vout = psbt.global.unsigned_tx.input[index].previous_output.vout;
+		let vout = psbt.unsigned_tx.input[index].previous_output.vout;
 		script_pubkey = &non_witness_utxo.output[vout as usize].script_pubkey;
 		amt = non_witness_utxo.output[vout as usize].value;
 	} else {
@@ -468,6 +587,33 @@ fn get_spk_amt(psbt: &psbt::PartiallySignedTransaction, index: usize) -> (&bitco
 	}
 	(script_pubkey, amt)
 }
+
+// Get the spending utxo for this psbt input
+// Should be rust-bitcoin method
+fn get_utxo(psbt: &psbt::PartiallySignedTransaction, index: usize) -> &bitcoin::TxOut {
+    let inp = &psbt.inputs[index];
+    let utxo = if let Some(ref witness_utxo) = inp.witness_utxo {
+        &witness_utxo
+    } else if let Some(ref non_witness_utxo) = inp.non_witness_utxo {
+        let vout = psbt.unsigned_tx.input[index].previous_output.vout;
+        &non_witness_utxo.output[vout as usize]
+    } else {
+		panic!("Missing psbt utxo")
+    };
+    utxo
+}
+
+/// Get the Prevouts for the psbt
+/// Should be updated to rust-bitcoin
+fn prevouts<'a>(psbt: &'a psbt::PartiallySignedTransaction) -> Vec<bitcoin::TxOut> {
+    let mut utxos = vec![];
+    for i in 0..psbt.inputs.len() {
+        let utxo_ref = get_utxo(psbt, i);
+        utxos.push(utxo_ref.clone()); // RC fix would allow references here instead of clone
+    }
+	utxos
+}
+
 
 fn exec_rawsign<'a>(matches: &clap::ArgMatches<'a>) {
 	let (raw, source) = file_or_raw(&matches.value_of("psbt").unwrap());
@@ -483,42 +629,88 @@ fn exec_rawsign<'a>(matches: &clap::ArgMatches<'a>) {
 		panic!("Psbt input index out of range")
 	}
 	let (spk, amt) = get_spk_amt(&psbt, i);
-	let redeem_script = psbt.inputs[i].redeem_script.as_ref().map(|x|
-		bitcoin::blockdata::script::Builder::new()
-		.push_slice(x.as_bytes())
-		.into_script());
-	let witness_script = psbt.inputs[i].witness_script.as_ref()
-		.map(|x| vec![x.clone().into_bytes()]);
-	let witness = witness_script.unwrap_or(Vec::new());
-	let script_sig = redeem_script.unwrap_or(bitcoin::Script::new());
+	// let redeem_script = psbt.inputs[i].redeem_script.as_ref().map(|x|
+	// 	bitcoin::blockdata::script::Builder::new()
+	// 	.push_slice(x.as_bytes())
+	// 	.into_script());
+	// let witness_script = psbt.inputs[i].witness_script.as_ref()
+	// 	.map(|x| vec![x.clone().into_bytes()]);
+	// let witness = bitcoin::Witness::from_vec(witness_script.unwrap_or(Vec::new()));
+	// let script_sig = redeem_script.unwrap_or(bitcoin::Script::new());
 
 	// Call with age and height 0.
 	// TODO: Create a method to rust-bitcoin psbt that outputs sighash
 	// Workaround using miniscript interpreter
-	let interp = miniscript::Interpreter::from_txdata(spk, &script_sig, &witness, 0, 0)
-		.expect("Witness/Redeem Script is not a Miniscript");
-	let sighash_ty = psbt.inputs[i].sighash_type.unwrap_or(bitcoin::SigHashType::All);
-	let msg = interp.sighash_message(&psbt.global.unsigned_tx, i, amt, sighash_ty);
-
+	let mut cache = bitcoin::util::sighash::SigHashCache::new(&psbt.unsigned_tx);
 	let sk = if let Ok(privkey) = PrivateKey::from_str(&priv_key) {
-		privkey.key
+		privkey.inner
 	} else if let Ok(sk) = secp256k1::SecretKey::from_str(&priv_key) {
 		sk
 	} else {
 		panic!("invalid WIF/hex private key: {}", priv_key);
 	};
-	let secp = secp256k1::Secp256k1::signing_only();
-	let pk = secp256k1::PublicKey::from_secret_key(&secp, &sk);
-	let pk = bitcoin::PublicKey {
-		compressed: compressed,
-		key: pk,
-	};
-	let secp_sig = secp.sign(&msg, &sk);
-	let mut btc_sig = secp_sig.serialize_der().as_ref().to_vec();
-	btc_sig.push(sighash_ty as u8);
-
-	// mutate the psbt
-	psbt.inputs[i].partial_sigs.insert(pk, btc_sig);
+	let secp = secp256k1::Secp256k1::new();
+	let utxos = prevouts(&psbt);
+    let utxos = &bitcoin::util::sighash::Prevouts::All(&utxos);
+	if psbt.inputs[i].redeem_script.is_some() || psbt.inputs[i].witness_script.is_some() {
+		let ecdsa_hash_ty = psbt.inputs[i].ecdsa_hash_ty().unwrap();
+		let msg = if psbt.inputs[i].witness_script.is_some() {
+			cache.segwit_signature_hash(i, spk, amt, ecdsa_hash_ty)
+				.unwrap()
+		} else {
+			cache.legacy_signature_hash(i, spk, ecdsa_hash_ty.as_u32())
+				.unwrap()
+		};
+		let pk = secp256k1::PublicKey::from_secret_key(&secp, &sk);
+		let pk = bitcoin::PublicKey {
+			compressed: compressed,
+			inner: pk,
+		};
+		let msg = secp256k1::Message::from_slice(msg.as_ref()).unwrap();
+		let secp_sig = secp.sign_ecdsa(&msg, &sk);
+		let btc_sig = bitcoin::EcdsaSig {
+			sig: secp_sig,
+			hash_ty: bitcoin::EcdsaSigHashType::All,
+		};
+		// mutate the psbt
+		psbt.inputs[i].partial_sigs.insert(pk, btc_sig);
+	} else if psbt.inputs[i].tap_internal_key.is_some() || !psbt.inputs[i].tap_scripts.is_empty() {
+		let schnorr_sighash_ty = psbt.inputs[i].schnorr_hash_ty().unwrap();
+		let keypair = secp256k1::KeyPair::from_secret_key(&secp, sk);
+		let entropy: [u8; 32] = rand::random();
+		let pk = XOnlyPublicKey::from_keypair(&keypair);
+		let is_key_spend = Some(pk) == psbt.inputs[i].tap_internal_key;
+		if is_key_spend {
+			let msg = cache.taproot_key_spend_signature_hash(i, &utxos, schnorr_sighash_ty).expect("SigHash Calculation error");
+			let msg = secp256k1::Message::from_slice(&msg).expect("32 byte");
+			let schnorr_sig = secp.sign_schnorr_with_aux_rand(&msg, &keypair, &entropy);
+			let btc_sig = bitcoin::SchnorrSig {
+				sig: schnorr_sig,
+				hash_ty: bitcoin::SchnorrSigHashType::Default,
+			};
+			psbt.inputs[i].tap_key_sig = Some(btc_sig);
+		} else {}
+		for (_ctrl_blk, (script, _ver)) in  psbt.inputs[i].tap_scripts.iter() {
+			let ms = Miniscript::<XOnlyPublicKey, Tap>::parse_insane(script).expect("Not a taproot miniscript");
+			if let Some(xpk) = ms.iter_pk().find(|x| pk == *x) {
+				let leaf_hash = TapLeafHash::from_script(script, LeafVersion::TapScript);
+				let msg = cache.taproot_script_spend_signature_hash (i, &utxos, leaf_hash, schnorr_sighash_ty)
+					.unwrap();
+				let msg = secp256k1::Message::from_slice(&msg).expect("32 byte");
+				let schnorr_sig = secp.sign_schnorr_with_aux_rand(&msg, &keypair, &entropy);
+				let btc_sig = bitcoin::SchnorrSig {
+					sig: schnorr_sig,
+					hash_ty: bitcoin::SchnorrSigHashType::Default,
+				};
+				psbt.inputs[i].tap_script_sigs.insert((xpk, leaf_hash), btc_sig);
+				break;
+			} else {
+				continue;
+			}
+		}
+	} else {
+		panic!("Unknown sighash method")
+	}
 	let raw = serialize(&psbt);
 	if let Some(path) = matches.value_of("output") {
 		let mut file = File::create(&path).expect("failed to open output file");
